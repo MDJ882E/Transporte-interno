@@ -7,3 +7,4 @@ coverage/
 # Datos reales de la empresa: nunca al repositorio
 datos/
 *.xlsx
+respaldos/
