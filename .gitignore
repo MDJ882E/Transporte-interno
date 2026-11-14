@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+.env
+*.log
+.DS_Store
+# Datos reales de la empresa: nunca al repositorio
+datos/
+*.xlsx
