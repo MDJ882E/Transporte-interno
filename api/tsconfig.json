@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": { "@shared/*": ["../shared/src/*"] },
+    "types": ["node"],
+    "lib": ["ES2023"]
+  },
+  "include": ["src", "test", "../shared/src"]
+}

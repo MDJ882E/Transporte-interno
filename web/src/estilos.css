@@ -1,0 +1,120 @@
+/* Diseño para campo: alto contraste bajo el sol, botones grandes para usar con guantes, texto corto. */
+:root {
+  --verde: #1f5130;
+  --verde-claro: #e3efe6;
+  --rojo: #b3261e;
+  --rojo-claro: #fbe9e7;
+  --ambar: #8a5a00;
+  --ambar-claro: #fff3d6;
+  --tinta: #14181a;
+  --tinta-suave: #4d5559;
+  --borde: #c9d0cc;
+  --fondo: #f4f6f3;
+  --superficie: #ffffff;
+  --radio: 14px;
+  --toque: 60px;
+  color-scheme: light;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 17px;
+  line-height: 1.4;
+  color: var(--tinta);
+  background: var(--fondo);
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--fondo); -webkit-tap-highlight-color: transparent; }
+button, input, select, textarea { font: inherit; color: inherit; }
+h1, h2, h3 { margin: 0; line-height: 1.2; }
+h1 { font-size: 1.25rem; }
+h2 { font-size: 1.1rem; }
+h3 { font-size: 1rem; }
+
+.contenedor { max-width: 720px; margin: 0 auto; padding: 12px 16px 96px; }
+.contenedor.ancho { max-width: 1100px; }
+.pila { display: grid; gap: 12px; }
+.fila { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.entre { justify-content: space-between; }
+.suave { color: var(--tinta-suave); }
+.pequeno { font-size: 0.85rem; }
+.grande { font-size: 1.6rem; font-weight: 700; }
+
+/* Encabezado */
+.barra {
+  position: sticky; top: 0; z-index: 5;
+  background: var(--verde); color: #fff;
+  padding: 10px 16px; padding-top: max(10px, env(safe-area-inset-top));
+}
+.barra .fila { max-width: 1100px; margin: 0 auto; }
+.barra button { background: transparent; border: 1px solid rgba(255,255,255,.6); color: #fff; border-radius: 10px; padding: 6px 12px; min-height: 40px; }
+.estado-sync { font-size: .85rem; padding: 4px 10px; border-radius: 999px; background: rgba(255,255,255,.16); }
+.estado-sync.alerta { background: var(--ambar-claro); color: var(--ambar); }
+
+/* Tarjetas */
+.tarjeta { background: var(--superficie); border: 1px solid var(--borde); border-radius: var(--radio); padding: 14px; }
+.tarjeta.activa { border: 2px solid var(--verde); }
+.tarjeta.espera { border: 2px solid var(--ambar); background: var(--ambar-claro); }
+
+/* Botones */
+.boton {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: var(--toque); padding: 0 18px; border-radius: var(--radio);
+  border: 2px solid var(--verde); background: var(--superficie); color: var(--verde);
+  font-weight: 650; cursor: pointer; text-align: center;
+}
+.boton.primario { background: var(--verde); color: #fff; }
+.boton.peligro { border-color: var(--rojo); color: var(--rojo); }
+.boton.bloque { width: 100%; }
+.boton.gigante { min-height: 88px; font-size: 1.3rem; width: 100%; }
+.boton:disabled { opacity: .45; cursor: not-allowed; }
+.boton:active:not(:disabled) { transform: scale(.98); }
+.enlace { background: none; border: none; color: var(--verde); text-decoration: underline; padding: 8px 0; min-height: 44px; cursor: pointer; }
+
+.cuadricula { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
+.opcion {
+  min-height: var(--toque); border-radius: var(--radio); border: 2px solid var(--borde);
+  background: var(--superficie); padding: 8px; font-weight: 600; cursor: pointer;
+}
+.opcion[aria-pressed='true'] { border-color: var(--verde); background: var(--verde-claro); color: var(--verde); }
+
+/* Formularios */
+label { display: grid; gap: 4px; font-weight: 600; }
+input, select, textarea {
+  min-height: 52px; border-radius: 12px; border: 2px solid var(--borde); padding: 8px 12px; background: var(--superficie);
+}
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible { outline: 3px solid #1b6ef3; outline-offset: 2px; }
+
+.contador { display: grid; grid-template-columns: var(--toque) 1fr var(--toque); align-items: center; gap: 8px; }
+.contador button { height: var(--toque); border-radius: 12px; border: 2px solid var(--verde); background: var(--superficie); color: var(--verde); font-size: 1.6rem; font-weight: 700; }
+.contador output { text-align: center; font-size: 1.5rem; font-weight: 700; }
+
+/* Hoja inferior (diálogo) */
+.velo { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
+.hoja {
+  background: var(--fondo); width: 100%; max-width: 720px; max-height: 92vh; overflow: auto;
+  border-radius: 20px 20px 0 0; padding: 16px 16px max(16px, env(safe-area-inset-bottom));
+}
+
+.aviso { padding: 12px 14px; border-radius: 12px; background: var(--ambar-claro); color: var(--ambar); font-weight: 600; }
+.aviso.error { background: var(--rojo-claro); color: var(--rojo); }
+.aviso.ok { background: var(--verde-claro); color: var(--verde); }
+
+/* Indicadores */
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+.kpi { background: var(--superficie); border: 1px solid var(--borde); border-radius: var(--radio); padding: 12px; }
+.kpi .valor { font-size: 1.7rem; font-weight: 750; }
+.kpi .meta { font-size: .8rem; color: var(--tinta-suave); }
+.kpi.malo { border-left: 6px solid var(--rojo); }
+.kpi.bueno { border-left: 6px solid var(--verde); }
+
+.tabla-envoltura { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; background: var(--superficie); font-size: .92rem; }
+th, td { padding: 8px 10px; border-bottom: 1px solid var(--borde); text-align: left; white-space: nowrap; }
+th { background: var(--verde-claro); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.pestanas { display: flex; gap: 6px; overflow-x: auto; }
+.pestanas button { min-height: 48px; padding: 0 14px; border-radius: 999px; border: 2px solid var(--borde); background: var(--superficie); font-weight: 600; }
+.pestanas button[aria-selected='true'] { border-color: var(--verde); background: var(--verde); color: #fff; }
+
+.linea-eventos { display: flex; gap: 6px; flex-wrap: wrap; }
+.linea-eventos span { font-size: .85rem; padding: 4px 8px; border-radius: 999px; background: var(--verde-claro); color: var(--verde); }

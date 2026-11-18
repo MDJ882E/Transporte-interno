@@ -1,0 +1,14 @@
+# Solo para desarrollo local: SQL Server 2022 en un contenedor (en producción se usa Azure SQL Database).
+# Uso: docker compose up -d  →  ver "Desarrollo" en README.md
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: 'Y'
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Desarrollo_Local_1!}
+    ports: ['1433:1433']
+    volumes:
+      - datos_sql:/var/opt/mssql
+
+volumes:
+  datos_sql:
