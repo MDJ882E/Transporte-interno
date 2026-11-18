@@ -29,5 +29,13 @@ def test_matriz_y_ciclo(tmp_path):
 
     sql = generar_sql("OL", nombres, metros, velocidad=55, cargue=5, descargue=5)
     # (330 + 220) / 55 + 10 = 20 min
-    assert "('B1', 'POS1', 330.0, 20.00)" in sql
-    assert "ON CONFLICT (origen_id, destino_id) DO UPDATE" in sql
+    assert "(N'B1', N'POS1', 330.0, 20.00)" in sql
+    assert "MERGE distancia" in sql
+    assert sql.count("INSERT INTO @dist VALUES") == 1
+
+
+def test_lotes_de_mil_filas():
+    nombres = [f"Bloque {i}" for i in range(1, 40)]
+    metros = {(o, d): 100.0 for o in nombres for d in nombres if o != d}  # 1.482 pares
+    sql = generar_sql("FE", nombres, metros, velocidad=None, cargue=10, descargue=10)
+    assert sql.count("INSERT INTO @dist VALUES") == 2

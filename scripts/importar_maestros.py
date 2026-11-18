@@ -3,7 +3,9 @@
 
 Uso:
     python3 scripts/importar_maestros.py --sede OL --archivo datos/matriz_olas.xlsx --hoja Matriz > datos/maestros_OL.sql
-    psql "$DATABASE_URL" -f datos/maestros_OL.sql
+    sqlcmd -S <servidor>.database.windows.net -d <base> -G -i datos/maestros_OL.sql   # Azure SQL con Entra ID
+
+El SQL generado es T-SQL (SQL Server / Azure SQL Database) y se aplica en una sola transacción.
 
 La matriz debe tener los nombres de los puntos en la primera fila y en la primera columna.
 Las filas cuyo primer valor no es un nombre de la cabecera se ignoran (por ejemplo, la fila de tipos).
@@ -75,7 +77,7 @@ def leer_matriz(archivo: str, hoja: str | None) -> tuple[list[str], dict[tuple[s
 
 
 def sql_texto(valor: str) -> str:
-    return "'" + valor.replace("'", "''") + "'"
+    return "N'" + valor.replace("'", "''") + "'"
 
 
 def generar_sql(sede: str, nombres: list[str], metros: dict[tuple[str, str], float],
@@ -86,16 +88,21 @@ def generar_sql(sede: str, nombres: list[str], metros: dict[tuple[str, str], flo
     if repetidos:
         raise ValueError(f"Códigos repetidos tras normalizar: {sorted(repetidos)}")
 
+    sede_sql = sql_texto(sede)
     lineas = [
         f"-- Datos maestros de la sede {sede}, generados por scripts/importar_maestros.py",
-        "BEGIN;",
-        "INSERT INTO punto (sede_id, codigo, nombre, tipo) VALUES",
-        ",\n".join(f"  ({sql_texto(sede)}, {sql_texto(p.codigo)}, {sql_texto(p.nombre)}, {sql_texto(p.tipo)})"
-                   for p in puntos.values()),
-        "ON CONFLICT (sede_id, codigo) DO UPDATE SET nombre = EXCLUDED.nombre, tipo = EXCLUDED.tipo;",
+        "SET XACT_ABORT ON;  -- ante cualquier error se deshace todo",
+        "BEGIN TRANSACTION;",
         "",
-        "CREATE TEMP TABLE _dist (origen text, destino text, metros numeric, ciclo numeric) ON COMMIT DROP;",
-        "INSERT INTO _dist VALUES",
+        "MERGE punto AS p",
+        "USING (VALUES",
+        ",\n".join(f"  ({sql_texto(p.codigo)}, {sql_texto(p.nombre)}, {sql_texto(p.tipo)})" for p in puntos.values()),
+        ") AS v (codigo, nombre, tipo)",
+        f"ON p.sede_id = {sede_sql} AND p.codigo = v.codigo",
+        "WHEN MATCHED THEN UPDATE SET nombre = v.nombre, tipo = v.tipo",
+        f"WHEN NOT MATCHED THEN INSERT (sede_id, codigo, nombre, tipo) VALUES ({sede_sql}, v.codigo, v.nombre, v.tipo);",
+        "",
+        "DECLARE @dist TABLE (origen NVARCHAR(20), destino NVARCHAR(20), metros DECIMAL(8,1), ciclo DECIMAL(6,2));",
     ]
     filas = []
     for (o, d), m in sorted(metros.items()):
@@ -105,16 +112,25 @@ def generar_sql(sede: str, nombres: list[str], metros: dict[tuple[str, str], flo
         else:
             ciclo = "NULL"
         filas.append(f"  ({sql_texto(puntos[o].codigo)}, {sql_texto(puntos[d].codigo)}, {m:.1f}, {ciclo})")
-    lineas.append(",\n".join(filas) + ";")
+    # SQL Server admite hasta 1.000 filas por INSERT ... VALUES.
+    for k in range(0, len(filas), 1000):
+        lineas.append("INSERT INTO @dist VALUES")
+        lineas.append(",\n".join(filas[k:k + 1000]) + ";")
     lineas += [
-        "INSERT INTO distancia (origen_id, destino_id, metros, ciclo_estandar_min)",
-        "SELECT po.id, pd.id, t.metros, t.ciclo",
-        "FROM _dist t",
-        f"JOIN punto po ON po.sede_id = {sql_texto(sede)} AND po.codigo = t.origen",
-        f"JOIN punto pd ON pd.sede_id = {sql_texto(sede)} AND pd.codigo = t.destino",
-        "ON CONFLICT (origen_id, destino_id) DO UPDATE",
-        "  SET metros = EXCLUDED.metros, ciclo_estandar_min = EXCLUDED.ciclo_estandar_min;",
-        "COMMIT;",
+        "",
+        "MERGE distancia AS x",
+        "USING (",
+        "  SELECT po.id AS origen_id, pd.id AS destino_id, t.metros, t.ciclo",
+        "  FROM @dist t",
+        f"  JOIN punto po ON po.sede_id = {sede_sql} AND po.codigo = t.origen",
+        f"  JOIN punto pd ON pd.sede_id = {sede_sql} AND pd.codigo = t.destino",
+        ") AS v",
+        "ON x.origen_id = v.origen_id AND x.destino_id = v.destino_id",
+        "WHEN MATCHED THEN UPDATE SET metros = v.metros, ciclo_estandar_min = v.ciclo",
+        "WHEN NOT MATCHED THEN INSERT (origen_id, destino_id, metros, ciclo_estandar_min)",
+        "  VALUES (v.origen_id, v.destino_id, v.metros, v.ciclo);",
+        "",
+        "COMMIT TRANSACTION;",
         "",
     ]
     return "\n".join(lineas)

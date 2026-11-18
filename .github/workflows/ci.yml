@@ -12,19 +12,19 @@ jobs:
   app:
     runs-on: ubuntu-latest
     services:
-      postgres:
-        image: postgres:16-alpine
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
         env:
-          POSTGRES_USER: transporte
-          POSTGRES_PASSWORD: transporte
-          POSTGRES_DB: transporte_test
-        ports: ['5432:5432']
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: Prueba_CI_2026!
+        ports: ['1433:1433']
         options: >-
-          --health-cmd "pg_isready -U transporte"
-          --health-interval 5s
-          --health-retries 10
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'Prueba_CI_2026!' -Q 'SELECT 1' -b"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
     env:
-      TEST_DATABASE_URL: postgres://transporte:transporte@localhost:5432/transporte_test
+      TEST_DATABASE_URL: Server=localhost,1433;Database=transporte_test;User Id=sa;Password=Prueba_CI_2026!;Encrypt=true;TrustServerCertificate=true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,10 +34,12 @@ jobs:
       - run: npm ci
       - name: Tipos
         run: npm run typecheck
-      - name: Pruebas (API con PostgreSQL y app)
+      - name: Pruebas (API con SQL Server y app)
         run: npm test
       - name: Compilación
         run: npm run build
+      - name: Paquete para Azure App Service
+        run: scripts/empaquetar.sh paquete.zip
 
   importador:
     runs-on: ubuntu-latest
@@ -49,12 +51,9 @@ jobs:
       - run: pip install openpyxl pytest
       - run: python -m pytest scripts -q
 
-  docker:
+  infraestructura:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Construir imágenes
-        env:
-          DB_PASSWORD: ci
-          JWT_SECRET: ci
-        run: docker compose build
+      - name: Validar plantilla Bicep
+        run: az bicep build --file infra/azure/main.bicep --stdout > /dev/null

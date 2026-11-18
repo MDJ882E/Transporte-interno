@@ -35,7 +35,7 @@ function validarHora(iso: string, ahora: number) {
 }
 
 async function exigirPunto(c: Cliente, id: number, sede: string, tipos?: string[]) {
-  const r = await c.query('SELECT tipo FROM punto WHERE id = $1 AND sede_id = $2 AND activo', [id, sede]);
+  const r = await c.query('SELECT tipo FROM punto WHERE id = $1 AND sede_id = $2 AND activo = 1', [id, sede]);
   const tipo = r.rows[0]?.tipo as string | undefined;
   if (!tipo) throw new Rechazo(`El punto ${id} no pertenece a la sede.`);
   if (tipos && !tipos.includes(tipo)) throw new Rechazo(`El punto ${id} no es de tipo ${tipos.join(' o ')}.`);
@@ -65,16 +65,23 @@ async function guardarContenido(
   contenido: { cuenta: string; baldes: number }[],
 ) {
   const cuentas = [...new Set(contenido.map((x) => x.cuenta))];
-  const validas = await c.query('SELECT codigo FROM cuenta WHERE codigo = ANY($1) AND activo', [cuentas]);
+  const validas = await c.query(
+    `SELECT codigo FROM cuenta
+     WHERE codigo IN (SELECT v FROM OPENJSON($1) WITH (v NVARCHAR(40) '$')) AND activo = 1`,
+    [cuentas],
+  );
   const faltan = cuentas.filter((k) => !validas.rows.some((r) => r.codigo === k));
   if (faltan.length) throw new Rechazo(`Cuenta desconocida: ${faltan.join(', ')}`);
   await c.query('DELETE FROM viaje_contenido WHERE viaje_id = $1', [viajeId]);
-  for (const item of contenido) {
-    await c.query(
-      `INSERT INTO viaje_contenido (viaje_id, cuenta, baldes) VALUES ($1, $2, $3)
-       ON CONFLICT (viaje_id, cuenta) DO UPDATE SET baldes = viaje_contenido.baldes + EXCLUDED.baldes`,
-      [viajeId, item.cuenta, item.baldes],
-    );
+  // Si una cuenta viene repetida, se suman sus baldes.
+  const porCuenta = new Map<string, number>();
+  for (const x of contenido) porCuenta.set(x.cuenta, (porCuenta.get(x.cuenta) ?? 0) + x.baldes);
+  for (const [cuenta, baldes] of porCuenta) {
+    await c.query('INSERT INTO viaje_contenido (viaje_id, cuenta, baldes) VALUES ($1, $2, $3)', [
+      viajeId,
+      cuenta,
+      baldes,
+    ]);
   }
   const total = contenido.reduce((a, x) => a + x.baldes, 0);
   await c.query(`UPDATE viaje SET cantidad = $2, unidad = 'balde' WHERE id = $1`, [viajeId, total]);
@@ -87,15 +94,15 @@ async function aplicar(c: Cliente, op: Operacion, u: UsuarioToken, ahora: number
       validarHora(op.inicio, ahora);
       await exigirRecurso(c, op.recurso_id, sede);
       await c.query(
-        `INSERT INTO turno (id, sede_id, usuario_id, recurso_id, inicio) VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (id) DO NOTHING`,
+        `IF NOT EXISTS (SELECT 1 FROM turno WHERE id = $1)
+         INSERT INTO turno (id, sede_id, usuario_id, recurso_id, inicio) VALUES ($1, $2, $3, $4, $5)`,
         [op.id, sede, u.id, op.recurso_id, op.inicio],
       );
       return;
     case 'turno_fin': {
       validarHora(op.fin, ahora);
       const r = await c.query(
-        'UPDATE turno SET fin = $3 WHERE id = $1 AND sede_id = $2 AND ($4 OR usuario_id = $5) AND inicio < $3',
+        'UPDATE turno SET fin = $3 WHERE id = $1 AND sede_id = $2 AND ($4 = 1 OR usuario_id = $5) AND inicio < $3',
         [op.id, sede, op.fin, u.rol === 'jefe_sede', u.id],
       );
       if (!r.rowCount) throw new Rechazo('Turno no encontrado o fin anterior al inicio.');
@@ -105,8 +112,9 @@ async function aplicar(c: Cliente, op: Operacion, u: UsuarioToken, ahora: number
       validarHora(op.creado_en, ahora);
       await exigirPunto(c, op.bloque_id, sede, ['bloque', 'banco']);
       await c.query(
-        `INSERT INTO llamado (id, sede_id, bloque_id, producto, cantidad_estimada, creado_por, creado_en)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING`,
+        `IF NOT EXISTS (SELECT 1 FROM llamado WHERE id = $1)
+         INSERT INTO llamado (id, sede_id, bloque_id, producto, cantidad_estimada, creado_por, creado_en)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [op.id, sede, op.bloque_id, op.producto, op.cantidad_estimada, u.id, op.creado_en],
       );
       return;
@@ -125,16 +133,17 @@ async function aplicar(c: Cliente, op: Operacion, u: UsuarioToken, ahora: number
       if (u.rol !== 'transportador') {
         if (op.transportador_id === null) throw new Rechazo('Indique el transportador del viaje.');
         const t = await c.query(
-          `SELECT 1 FROM usuario WHERE id = $1 AND sede_id = $2 AND rol = 'transportador' AND activo`,
+          `SELECT 1 FROM usuario WHERE id = $1 AND sede_id = $2 AND rol = 'transportador' AND activo = 1`,
           [op.transportador_id, sede],
         );
         if (!t.rowCount) throw new Rechazo('El transportador no existe o no es de la sede.');
         transportador = op.transportador_id;
       }
       const r = await c.query(
-        `INSERT INTO viaje (id, sede_id, transportador_id, turno_id, recurso_id, llamado_id, origen_id, destino_id,
+        `IF NOT EXISTS (SELECT 1 FROM viaje WHERE id = $1)
+         INSERT INTO viaje (id, sede_id, transportador_id, turno_id, recurso_id, llamado_id, origen_id, destino_id,
                             producto, cantidad, unidad, creado_en, creado_por)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (id) DO NOTHING`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
         [
           op.id,
           sede,
@@ -170,8 +179,8 @@ async function aplicar(c: Cliente, op: Operacion, u: UsuarioToken, ahora: number
       validarHora(op.ocurrido_en, ahora);
       await exigirViaje(c, op.viaje_id, u, true);
       await c.query(
-        `INSERT INTO evento_viaje (id, viaje_id, tipo, ocurrido_en, registrado_por) VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT DO NOTHING`,
+        `IF NOT EXISTS (SELECT 1 FROM evento_viaje WHERE id = $1 OR (viaje_id = $2 AND tipo = $3))
+         INSERT INTO evento_viaje (id, viaje_id, tipo, ocurrido_en, registrado_por) VALUES ($1, $2, $3, $4, $5)`,
         [op.id, op.viaje_id, op.evento, op.ocurrido_en, u.id],
       );
       if (op.evento === 'salida_bloque') {
@@ -189,8 +198,8 @@ async function aplicar(c: Cliente, op: Operacion, u: UsuarioToken, ahora: number
       const causa = await c.query('SELECT 1 FROM causa_espera WHERE codigo = $1', [op.causa]);
       if (!causa.rowCount) throw new Rechazo(`Causa de espera desconocida: ${op.causa}`);
       await c.query(
-        `INSERT INTO espera (id, sede_id, usuario_id, viaje_id, causa, inicio) VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (id) DO NOTHING`,
+        `IF NOT EXISTS (SELECT 1 FROM espera WHERE id = $1)
+         INSERT INTO espera (id, sede_id, usuario_id, viaje_id, causa, inicio) VALUES ($1, $2, $3, $4, $5, $6)`,
         [op.id, sede, u.id, op.viaje_id, op.causa, op.inicio],
       );
       return;
@@ -198,7 +207,7 @@ async function aplicar(c: Cliente, op: Operacion, u: UsuarioToken, ahora: number
     case 'espera_fin': {
       validarHora(op.fin, ahora);
       const r = await c.query(
-        'UPDATE espera SET fin = $3 WHERE id = $1 AND sede_id = $2 AND inicio <= $3 AND ($4 OR usuario_id = $5)',
+        'UPDATE espera SET fin = $3 WHERE id = $1 AND sede_id = $2 AND inicio <= $3 AND ($4 = 1 OR usuario_id = $5)',
         [op.id, sede, op.fin, u.rol === 'jefe_sede', u.id],
       );
       if (!r.rowCount) throw new Rechazo('Espera no encontrada o fin anterior al inicio.');
@@ -208,8 +217,8 @@ async function aplicar(c: Cliente, op: Operacion, u: UsuarioToken, ahora: number
       validarHora(op.ocurrido_en, ahora);
       await exigirViaje(c, op.viaje_id, u, false);
       await c.query(
-        `INSERT INTO recibo (id, viaje_id, recibido_por, ocurrido_en, cantidad, novedad) VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT DO NOTHING`,
+        `IF NOT EXISTS (SELECT 1 FROM recibo WHERE id = $1 OR viaje_id = $2)
+         INSERT INTO recibo (id, viaje_id, recibido_por, ocurrido_en, cantidad, novedad) VALUES ($1, $2, $3, $4, $5, $6)`,
         [op.id, op.viaje_id, u.id, op.ocurrido_en, op.cantidad, op.novedad],
       );
       return;
@@ -220,8 +229,9 @@ async function aplicar(c: Cliente, op: Operacion, u: UsuarioToken, ahora: number
       const tipo = await c.query('SELECT 1 FROM tipo_falla WHERE codigo = $1', [op.tipo_falla]);
       if (!tipo.rowCount) throw new Rechazo(`Tipo de falla desconocido: ${op.tipo_falla}`);
       await c.query(
-        `INSERT INTO falla (id, sede_id, recurso_id, punto_id, tipo, descripcion, inicio, reportado_por)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING`,
+        `IF NOT EXISTS (SELECT 1 FROM falla WHERE id = $1)
+         INSERT INTO falla (id, sede_id, recurso_id, punto_id, tipo, descripcion, inicio, reportado_por)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [op.id, sede, op.recurso_id, op.punto_id, op.tipo_falla, op.descripcion, op.inicio, u.id],
       );
       return;
@@ -257,13 +267,13 @@ export async function rutasSync(app: FastifyInstance) {
           resultado.rechazadas.push({ id: op.id, motivo: 'Su rol no puede registrar esta operación.' });
           continue;
         }
-        await c.query('SAVEPOINT op');
+        await c.query('SAVE TRANSACTION op');
         try {
           await aplicar(c, op, u, ahora);
-          await c.query('RELEASE SAVEPOINT op');
           resultado.aplicadas.push(op.id);
         } catch (e) {
-          await c.query('ROLLBACK TO SAVEPOINT op');
+          // Si el error dejó la transacción inutilizable, falla el lote completo y el teléfono lo reintenta.
+          await c.query('ROLLBACK TRANSACTION op');
           if (e instanceof Rechazo) {
             resultado.rechazadas.push({ id: op.id, motivo: e.message });
           } else {

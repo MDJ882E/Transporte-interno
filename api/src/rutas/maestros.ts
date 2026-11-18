@@ -5,14 +5,12 @@ export async function rutasMaestros(app: FastifyInstance) {
   // Datos de referencia que la app guarda en el teléfono para trabajar sin señal.
   app.get('/api/maestros', { preHandler: app.requiere() }, async (req): Promise<Maestros> => {
     const sede = req.user.sede_id; // null = todas las sedes
-    const filtro = 'WHERE ($1::text IS NULL OR sede_id = $1) AND activo';
+    const filtro = 'WHERE ($1 IS NULL OR sede_id = $1) AND activo = 1';
     const [sedes, puntos, recursos, causas, fallas, sugerido, cuentas, transportadores] = await Promise.all([
-      app.db.query('SELECT id, nombre, medio FROM sede WHERE ($1::text IS NULL OR id = $1) ORDER BY id', [
-        sede,
-      ]),
+      app.db.query('SELECT id, nombre, medio FROM sede WHERE ($1 IS NULL OR id = $1) ORDER BY id', [sede]),
       app.db.query(
         `SELECT id, sede_id, codigo, nombre, tipo FROM punto ${filtro}
-         ORDER BY sede_id, tipo, length(codigo), codigo`,
+         ORDER BY sede_id, tipo, LEN(codigo), codigo`,
         [sede],
       ),
       app.db.query(`SELECT id, sede_id, codigo, tipo FROM recurso ${filtro} ORDER BY sede_id, codigo`, [
@@ -22,18 +20,21 @@ export async function rutasMaestros(app: FastifyInstance) {
       app.db.query('SELECT codigo, nombre, medio FROM tipo_falla ORDER BY orden'),
       // Para cada bloque, la poscosecha con menor ciclo estándar (o menor distancia si no hay ciclo).
       app.db.query<{ bloque: number; destino: number }>(
-        `SELECT DISTINCT ON (o.id) o.id AS bloque, d.id AS destino
-         FROM distancia x
-         JOIN punto o ON o.id = x.origen_id AND o.tipo = 'bloque'
-         JOIN punto d ON d.id = x.destino_id AND d.tipo = 'poscosecha' AND d.activo
-         WHERE ($1::text IS NULL OR o.sede_id = $1)
-         ORDER BY o.id, x.ciclo_estandar_min NULLS LAST, x.metros`,
+        `SELECT bloque, destino FROM (
+           SELECT o.id AS bloque, d.id AS destino,
+                  ROW_NUMBER() OVER (PARTITION BY o.id
+                    ORDER BY CASE WHEN x.ciclo_estandar_min IS NULL THEN 1 ELSE 0 END, x.ciclo_estandar_min, x.metros) AS n
+           FROM distancia x
+           JOIN punto o ON o.id = x.origen_id AND o.tipo = 'bloque'
+           JOIN punto d ON d.id = x.destino_id AND d.tipo = 'poscosecha' AND d.activo = 1
+           WHERE ($1 IS NULL OR o.sede_id = $1)
+         ) t WHERE n = 1`,
         [sede],
       ),
-      app.db.query('SELECT codigo, nombre FROM cuenta WHERE activo ORDER BY nombre'),
+      app.db.query('SELECT codigo, nombre FROM cuenta WHERE activo = 1 ORDER BY nombre'),
       app.db.query(
         `SELECT id, nombre, sede_id FROM usuario
-         WHERE rol = 'transportador' AND activo AND ($1::text IS NULL OR sede_id = $1) ORDER BY nombre`,
+         WHERE rol = 'transportador' AND activo = 1 AND ($1 IS NULL OR sede_id = $1) ORDER BY nombre`,
         [sede],
       ),
     ]);

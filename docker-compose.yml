@@ -1,54 +1,14 @@
-# Despliegue en el servidor propio de la empresa: base de datos, API, app con HTTPS y respaldo diario.
-# Uso: cp .env.example .env  (completar valores)  →  docker compose up -d --build
+# Solo para desarrollo local: SQL Server 2022 en un contenedor (en producción se usa Azure SQL Database).
+# Uso: docker compose up -d  →  ver "Desarrollo" en README.md
 services:
-  db:
-    image: postgres:16-alpine
-    restart: unless-stopped
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
     environment:
-      POSTGRES_DB: transporte
-      POSTGRES_USER: transporte
-      POSTGRES_PASSWORD: ${DB_PASSWORD:?Defina DB_PASSWORD en .env}
+      ACCEPT_EULA: 'Y'
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Desarrollo_Local_1!}
+    ports: ['1433:1433']
     volumes:
-      - datos_db:/var/lib/postgresql/data
-    healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U transporte']
-      interval: 10s
-      retries: 5
-
-  api:
-    build: { context: ., dockerfile: infra/api.Dockerfile }
-    restart: unless-stopped
-    depends_on:
-      db: { condition: service_healthy }
-    environment:
-      DATABASE_URL: postgres://transporte:${DB_PASSWORD}@db:5432/transporte
-      JWT_SECRET: ${JWT_SECRET:?Defina JWT_SECRET en .env}
-      OFFSET_ZONA: '-05:00'
-
-  web:
-    build: { context: ., dockerfile: infra/web.Dockerfile }
-    restart: unless-stopped
-    depends_on: [api]
-    environment:
-      DOMINIO: ${DOMINIO:-localhost}
-    ports:
-      - '80:80'
-      - '443:443'
-    volumes:
-      - caddy_datos:/data
-
-  respaldo:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    depends_on:
-      db: { condition: service_healthy }
-    environment:
-      PGPASSWORD: ${DB_PASSWORD}
-    volumes:
-      - ./respaldos:/respaldos
-      - ./infra/respaldo.sh:/respaldo.sh:ro
-    entrypoint: ['sh', '/respaldo.sh']
+      - datos_sql:/var/opt/mssql
 
 volumes:
-  datos_db:
-  caddy_datos:
+  datos_sql:

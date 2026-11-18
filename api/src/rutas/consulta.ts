@@ -18,6 +18,16 @@ export interface ViajeDetalle {
   recibido: boolean;
 }
 
+/** Subconsulta con los eventos de un viaje como JSON ([{tipo, ocurrido_en}]). Requiere el alias v para viaje. */
+export const EVENTOS_JSON = `(SELECT e.tipo, e.ocurrido_en FROM evento_viaje e WHERE e.viaje_id = v.id FOR JSON PATH)`;
+
+/** Convierte el JSON de EVENTOS_JSON en { tipo: hora ISO }. */
+export function leerEventos(json: string | null): Record<string, string> {
+  if (!json) return {};
+  const lista = JSON.parse(json) as { tipo: string; ocurrido_en: string }[];
+  return Object.fromEntries(lista.map((e) => [e.tipo, new Date(e.ocurrido_en).toISOString()]));
+}
+
 /** Viajes de un día con sus eventos. Reutilizado por el tablero y la exportación. */
 export async function viajesDelDia(
   app: FastifyInstance,
@@ -26,23 +36,21 @@ export async function viajesDelDia(
   hasta: Date,
   transportadorId?: number,
 ): Promise<ViajeDetalle[]> {
-  const r = await app.db.query<ViajeDetalle>(
+  const r = await app.db.query<Omit<ViajeDetalle, 'eventos'> & { eventos: string | null }>(
     `SELECT v.id, u.nombre AS transportador, v.transportador_id, o.nombre AS origen, v.origen_id,
             d.nombre AS destino, v.destino_id, v.producto, v.cantidad, v.unidad, v.llamado_id, v.creado_en,
-            COALESCE(jsonb_object_agg(e.tipo, e.ocurrido_en) FILTER (WHERE e.tipo IS NOT NULL), '{}') AS eventos,
-            EXISTS (SELECT 1 FROM recibo r WHERE r.viaje_id = v.id) AS recibido
+            ${EVENTOS_JSON} AS eventos,
+            CAST(CASE WHEN EXISTS (SELECT 1 FROM recibo r WHERE r.viaje_id = v.id) THEN 1 ELSE 0 END AS BIT) AS recibido
      FROM viaje v
      JOIN usuario u ON u.id = v.transportador_id
      JOIN punto o ON o.id = v.origen_id
      JOIN punto d ON d.id = v.destino_id
-     LEFT JOIN evento_viaje e ON e.viaje_id = v.id
-     WHERE v.sede_id = $1 AND v.creado_en >= $2 AND v.creado_en < $3 AND NOT v.anulado
-       AND ($4::int IS NULL OR v.transportador_id = $4)
-     GROUP BY v.id, u.nombre, o.nombre, d.nombre
+     WHERE v.sede_id = $1 AND v.creado_en >= $2 AND v.creado_en < $3 AND v.anulado = 0
+       AND ($4 IS NULL OR v.transportador_id = $4)
      ORDER BY v.creado_en DESC`,
     [sede, desde, hasta, transportadorId ?? null],
   );
-  return r.rows;
+  return r.rows.map((v) => ({ ...v, eventos: leerEventos(v.eventos) }));
 }
 
 export async function rutasConsulta(app: FastifyInstance) {
@@ -57,7 +65,7 @@ export async function rutasConsulta(app: FastifyInstance) {
        JOIN punto p ON p.id = l.bloque_id
        JOIN usuario c ON c.id = l.creado_por
        LEFT JOIN usuario a ON a.id = l.asignado_a
-       WHERE l.sede_id = $1 AND l.estado IN ('pendiente', 'asignado') AND l.creado_en > now() - interval '24 hours'
+       WHERE l.sede_id = $1 AND l.estado IN ('pendiente', 'asignado') AND l.creado_en > DATEADD(HOUR, -24, SYSDATETIMEOFFSET())
        ORDER BY l.creado_en`,
       [sede],
     );

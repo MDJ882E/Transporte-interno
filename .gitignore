@@ -8,3 +8,5 @@ coverage/
 datos/
 *.xlsx
 respaldos/
+__pycache__/
+*.pyc

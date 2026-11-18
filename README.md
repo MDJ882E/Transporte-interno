@@ -37,21 +37,28 @@ Los permisos se verifican en el servidor en cada consulta, no solo en la pantall
 | Carpeta | Contenido |
 | --- | --- |
 | `web/` | App instalable (PWA) en React y TypeScript |
-| `api/` | API en Node.js (Fastify) con PostgreSQL |
+| `api/` | API en Node.js (Fastify) con SQL Server; en producción también publica la app |
 | `shared/` | Contratos compartidos (operaciones, roles, indicadores) |
 | `db/migrations/` | Esquema de la base, versionado |
 | `db/demo/` | Datos **ficticios** para desarrollo |
-| `scripts/` | Importador de matrices de distancias desde Excel |
-| `infra/`, `docker-compose.yml` | Despliegue en el servidor de la empresa |
+| `scripts/` | Importador de matrices de distancias desde Excel y empaquetado para Azure |
+| `infra/azure/` | Infraestructura en Azure (App Service + Azure SQL Database) |
+| `docker-compose.yml` | SQL Server local, solo para desarrollo |
 | `docs/` | [Despliegue](docs/despliegue.md) y [piloto e indicadores](docs/piloto.md) |
+
+## Arquitectura
+
+Un solo **web service en Azure App Service** (Linux, Node.js 22) publica la API y la app, con HTTPS administrado por Azure. Los datos están en **Azure SQL Database**, con copias de seguridad automáticas y restauración a un punto en el tiempo. La app entra a la base con su identidad administrada, sin contraseñas guardadas. Detalle en [despliegue](docs/despliegue.md).
 
 ## Desarrollo local
 
-Requisitos: Node.js 22 y PostgreSQL 16.
+Requisitos: Node.js 22 y Docker (para SQL Server).
 
 ```bash
 npm install
-export DATABASE_URL=postgres://usuario:clave@localhost/transporte_dev
+docker compose up -d     # SQL Server 2022 local
+docker compose exec sqlserver /opt/mssql-tools18/bin/sqlcmd -C -U sa -P 'Desarrollo_Local_1!' -Q "CREATE DATABASE transporte_dev"
+cp .env.example .env     # la API y los comandos de base leen este archivo
 npm run db:demo          # migraciones + datos ficticios (PIN 1234)
 npm run dev:api          # API en :3000
 npm run dev:web          # app en :5173
@@ -62,10 +69,11 @@ Usuarios de demostración (PIN `1234`): `111` anotador, `110` jefe de Olas, `113
 Pruebas:
 
 ```bash
-TEST_DATABASE_URL=postgres://usuario:clave@localhost/transporte_test npm test   # ¡borra esa base!
+# ¡Borra y recrea esa base! El nombre debe terminar en _test.
+TEST_DATABASE_URL='Server=localhost,1433;Database=transporte_test;User Id=sa;Password=Desarrollo_Local_1!;Encrypt=true;TrustServerCertificate=true' npm test
 python3 -m pytest scripts
 ```
 
 ## Datos de la empresa
 
-Este repositorio no guarda datos reales: ni nombres, ni códigos de empleados, ni matrices de distancias, ni archivos de poscosecha. La carpeta `datos/` está excluida de git. Los maestros reales se cargan en el servidor (ver [despliegue](docs/despliegue.md)).
+Este repositorio no guarda datos reales: ni nombres, ni códigos de empleados, ni matrices de distancias, ni archivos de poscosecha. La carpeta `datos/` está excluida de git. Los maestros reales se cargan directamente en la base de Azure (ver [despliegue](docs/despliegue.md)).

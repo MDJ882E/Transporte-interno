@@ -1,4 +1,4 @@
-// Pruebas de integración contra PostgreSQL. Requieren TEST_DATABASE_URL (en CI lo provee un servicio Postgres).
+// Pruebas de integración contra SQL Server. Requieren TEST_DATABASE_URL (en CI lo provee un contenedor SQL Server).
 // La base indicada se BORRA y se recrea en cada corrida: no apunte nunca a una base real.
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -9,7 +9,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Maestros, ResultadoSync } from '@shared/dominio';
 import { crearApp, hoyLocal } from '../src/app';
 import { crearPool, type Db } from '../src/db';
-import { migrar } from '../src/migraciones';
+import { ejecutarScript, migrar } from '../src/migraciones';
 
 const url = process.env.TEST_DATABASE_URL;
 const dbDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../db');
@@ -39,10 +39,19 @@ describe.skipIf(!url)('API con base de datos', () => {
   const hace = (min: number) => new Date(t0 - min * 60_000).toISOString();
 
   beforeAll(async () => {
+    // Recrea la base de pruebas desde master.
+    const nombre = /Database=([^;]+)/i.exec(url!)?.[1];
+    if (!nombre || !/^\w+_test$/.test(nombre))
+      throw new Error('TEST_DATABASE_URL debe apuntar a una base *_test');
+    const master = crearPool(url!.replace(/Database=[^;]+/i, 'Database=master'));
+    await master.query(
+      `IF DB_ID('${nombre}') IS NOT NULL ALTER DATABASE [${nombre}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+       DROP DATABASE IF EXISTS [${nombre}]; CREATE DATABASE [${nombre}];`,
+    );
+    await master.end();
     db = crearPool(url!);
-    await db.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
     await migrar(db, path.join(dbDir, 'migrations'));
-    await db.query(await readFile(path.join(dbDir, 'demo/demo.sql'), 'utf8'));
+    await ejecutarScript(db, await readFile(path.join(dbDir, 'demo/demo.sql'), 'utf8'));
     app = await crearApp({ db, jwtSecret: 'prueba' });
     for (const doc of ['100', '101', '110', '111', '112', '113', '114']) {
       const r = await app.inject({
@@ -134,7 +143,7 @@ describe.skipIf(!url)('API con base de datos', () => {
     // Reenviar el mismo lote (teléfono que perdió la respuesta) no duplica nada.
     const r3 = await sync('113', ops);
     expect(r3.aplicadas).toHaveLength(ops.length);
-    expect((await db.query('SELECT count(*)::int AS n FROM evento_viaje')).rows[0].n).toBe(5);
+    expect((await db.query('SELECT COUNT(*) AS n FROM evento_viaje')).rows[0].n).toBe(5);
 
     const recibo = await sync('112', [
       {

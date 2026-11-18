@@ -1,4 +1,4 @@
-// Configuración leída de variables de entorno (ver .env.example).
+// Configuración leída de variables de entorno (ver .env.example; en Azure, la configuración del App Service).
 function requerida(nombre: string): string {
   const v = process.env[nombre];
   if (!v) throw new Error(`Falta la variable de entorno ${nombre}`);
@@ -15,5 +15,7 @@ export const config = {
   offsetZona: process.env.OFFSET_ZONA ?? '-05:00',
   /** Duración de la sesión en el teléfono: un turno largo más margen. */
   duracionSesion: process.env.DURACION_SESION ?? '14h',
+  /** Aplica las migraciones pendientes al arrancar (por defecto sí). */
+  migrarAlArrancar: process.env.MIGRAR_AL_ARRANCAR !== 'false',
   origenesPermitidos: (process.env.ORIGENES_PERMITIDOS ?? '').split(',').filter(Boolean),
 };

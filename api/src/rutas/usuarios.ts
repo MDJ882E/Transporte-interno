@@ -30,7 +30,7 @@ export async function rutasUsuarios(app: FastifyInstance) {
   app.get('/api/usuarios', { preHandler: gestores }, async (req) => {
     const r = await app.db.query(
       `SELECT id, documento, nombre, rol, sede_id, activo, codigo_barras FROM usuario
-       WHERE $1::text IS NULL OR sede_id = $1 ORDER BY activo DESC, sede_id, rol, nombre`,
+       WHERE $1 IS NULL OR sede_id = $1 ORDER BY activo DESC, sede_id, rol, nombre`,
       [req.user.sede_id],
     );
     return r.rows;
@@ -52,13 +52,15 @@ export async function rutasUsuarios(app: FastifyInstance) {
     if (!u.sede_id && !ROLES_GLOBALES.includes(u.rol))
       return rep.code(400).send({ error: 'Este rol necesita sede.' });
     const r = await app.db.query(
-      `INSERT INTO usuario (documento, nombre, rol, sede_id, pin_hash, codigo_barras) VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT DO NOTHING RETURNING id`,
+      `IF NOT EXISTS (SELECT 1 FROM usuario WHERE documento = $1 OR ($6 IS NOT NULL AND codigo_barras = $6))
+         INSERT INTO usuario (documento, nombre, rol, sede_id, pin_hash, codigo_barras)
+         OUTPUT INSERTED.id
+         VALUES ($1, $2, $3, $4, $5, $6)`,
       [u.documento, u.nombre, u.rol, u.sede_id, await bcrypt.hash(u.pin, 10), u.codigo_barras],
     );
     if (!r.rowCount)
       return rep.code(409).send({ error: 'Ya existe un usuario con ese documento o código de barras.' });
-    return rep.code(201).send({ id: r.rows[0].id });
+    return rep.code(201).send({ id: r.rows[0]?.id });
   });
 
   // Activar/desactivar o cambiar PIN. El jefe de sede solo gestiona usuarios operativos de su sede.
@@ -70,7 +72,7 @@ export async function rutasUsuarios(app: FastifyInstance) {
     const r = await app.db.query(
       `UPDATE usuario SET activo = COALESCE($2, activo), pin_hash = COALESCE($3, pin_hash),
               codigo_barras = COALESCE($6, codigo_barras)
-       WHERE id = $1 AND ($4::text IS NULL OR (sede_id = $4 AND rol = ANY($5)))`,
+       WHERE id = $1 AND ($4 IS NULL OR (sede_id = $4 AND rol IN (SELECT v FROM OPENJSON($5) WITH (v NVARCHAR(20) '$'))))`,
       [
         id,
         d.data.activo ?? null,
@@ -99,8 +101,8 @@ export async function rutasUsuarios(app: FastifyInstance) {
     const d = Cuenta.safeParse(req.body);
     if (!d.success) return rep.code(400).send({ error: 'Código y nombre son obligatorios.' });
     await app.db.query(
-      `INSERT INTO cuenta (codigo, nombre) VALUES ($1, $2)
-       ON CONFLICT (codigo) DO UPDATE SET nombre = EXCLUDED.nombre, activo = true`,
+      `UPDATE cuenta SET nombre = $2, activo = 1 WHERE codigo = $1;
+       IF @@ROWCOUNT = 0 INSERT INTO cuenta (codigo, nombre) VALUES ($1, $2);`,
       [d.data.codigo, d.data.nombre],
     );
     return rep.code(201).send({ ok: true });

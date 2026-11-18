@@ -22,36 +22,49 @@ export async function rutasLecturas(app: FastifyInstance) {
         const mapa = new Map(
           (
             await c.query<{ codigo_barras: string; id: number }>(
-              `SELECT codigo_barras, id FROM usuario WHERE sede_id = $1 AND codigo_barras = ANY($2)`,
+              `SELECT codigo_barras, id FROM usuario
+               WHERE sede_id = $1 AND codigo_barras IN (SELECT v FROM OPENJSON($2) WITH (v NVARCHAR(40) '$'))`,
               [sede, codigos],
             )
           ).rows.map((r) => [r.codigo_barras, r.id]),
         );
 
-        let nuevas = 0;
-        for (const l of lote.data.lecturas) {
-          const r = await c.query(
-            `INSERT INTO lectura_poscosecha (sede_id, codigo_transportador, transportador_id, baldes, ocurrido_en,
-                                             novedad, archivo, importado_por)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-             -- Si el código no tenía transportador y ahora sí, se completa al reimportar.
-             ON CONFLICT (sede_id, codigo_transportador, ocurrido_en) DO UPDATE
-               SET transportador_id = EXCLUDED.transportador_id
-               WHERE lectura_poscosecha.transportador_id IS NULL AND EXCLUDED.transportador_id IS NOT NULL
-             RETURNING (xmax = 0) AS insertada`,
-            [
-              sede,
-              l.codigo_transportador,
-              mapa.get(l.codigo_transportador) ?? null,
-              l.baldes,
-              l.ocurrido_en,
-              l.novedad,
-              lote.data.archivo,
-              req.user.id,
-            ],
-          );
-          if (r.rows[0]?.insertada) nuevas++;
-        }
+        // Se envían todas las lecturas en un solo parámetro JSON: una consulta en vez de miles.
+        // Una misma lectura repetida en el archivo se toma una vez.
+        const unicas = new Map(
+          lote.data.lecturas.map((l) => [
+            `${l.codigo_transportador}|${Date.parse(l.ocurrido_en)}`,
+            {
+              codigo: l.codigo_transportador,
+              transportador_id: mapa.get(l.codigo_transportador) ?? null,
+              baldes: l.baldes,
+              ocurrido_en: new Date(l.ocurrido_en).toISOString(),
+              novedad: l.novedad,
+            },
+          ]),
+        );
+        const json = JSON.stringify([...unicas.values()]);
+        const LECTURAS = `OPENJSON($2) WITH (codigo NVARCHAR(40) '$.codigo', transportador_id INT '$.transportador_id',
+                            baldes INT '$.baldes', ocurrido_en DATETIMEOFFSET(3) '$.ocurrido_en',
+                            novedad NVARCHAR(500) '$.novedad')`;
+        // Si el código no tenía transportador y ahora sí, se completa al reimportar.
+        await c.query(
+          `UPDATE l SET transportador_id = j.transportador_id
+           FROM lectura_poscosecha l
+           JOIN ${LECTURAS} j ON l.codigo_transportador = j.codigo AND l.ocurrido_en = j.ocurrido_en
+           WHERE l.sede_id = $1 AND l.transportador_id IS NULL AND j.transportador_id IS NOT NULL`,
+          [sede, json],
+        );
+        const insertadas = await c.query(
+          `INSERT INTO lectura_poscosecha (sede_id, codigo_transportador, transportador_id, baldes, ocurrido_en,
+                                           novedad, archivo, importado_por)
+           SELECT $1, j.codigo, j.transportador_id, j.baldes, j.ocurrido_en, j.novedad, $3, $4
+           FROM ${LECTURAS} j
+           WHERE NOT EXISTS (SELECT 1 FROM lectura_poscosecha l
+                             WHERE l.sede_id = $1 AND l.codigo_transportador = j.codigo AND l.ocurrido_en = j.ocurrido_en)`,
+          [sede, json, lote.data.archivo, req.user.id],
+        );
+        const nuevas = insertadas.rowCount;
 
         // Emparejar todas las lecturas pendientes del rango del archivo (también las de importaciones previas).
         const tiempos = lote.data.lecturas.map((l) => Date.parse(l.ocurrido_en));
@@ -73,8 +86,8 @@ export async function rutasLecturas(app: FastifyInstance) {
           `SELECT v.id, v.transportador_id, s.ocurrido_en AS salida_bloque
            FROM viaje v
            JOIN evento_viaje s ON s.viaje_id = v.id AND s.tipo = 'salida_bloque'
-           WHERE v.sede_id = $1 AND NOT v.anulado
-             AND s.ocurrido_en BETWEEN $2::timestamptz - make_interval(mins => $4) AND $3
+           WHERE v.sede_id = $1 AND v.anulado = 0
+             AND s.ocurrido_en BETWEEN DATEADD(MINUTE, -$4, $2) AND $3
              AND NOT EXISTS (SELECT 1 FROM evento_viaje d WHERE d.viaje_id = v.id AND d.tipo = 'llegada_destino')
              AND NOT EXISTS (SELECT 1 FROM lectura_poscosecha l WHERE l.viaje_id = v.id)`,
           [sede, desde, hasta, VENTANA_EMPAREJAR_MIN],
@@ -92,13 +105,15 @@ export async function rutasLecturas(app: FastifyInstance) {
           const l = porId.get(lecturaId as number)!;
           await c.query('UPDATE lectura_poscosecha SET viaje_id = $2 WHERE id = $1', [lecturaId, viajeId]);
           await c.query(
-            `INSERT INTO evento_viaje (id, viaje_id, tipo, ocurrido_en, registrado_por, origen)
-             VALUES (gen_random_uuid(), $1, 'llegada_destino', $2, $3, 'lectura_poscosecha') ON CONFLICT DO NOTHING`,
+            `IF NOT EXISTS (SELECT 1 FROM evento_viaje WHERE viaje_id = $1 AND tipo = 'llegada_destino')
+               INSERT INTO evento_viaje (id, viaje_id, tipo, ocurrido_en, registrado_por, origen)
+               VALUES (NEWID(), $1, 'llegada_destino', $2, $3, 'lectura_poscosecha')`,
             [viajeId, l.ocurrido_en, req.user.id],
           );
           await c.query(
-            `INSERT INTO recibo (id, viaje_id, recibido_por, ocurrido_en, cantidad, novedad)
-             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
+            `IF NOT EXISTS (SELECT 1 FROM recibo WHERE viaje_id = $1)
+               INSERT INTO recibo (id, viaje_id, recibido_por, ocurrido_en, cantidad, novedad)
+               VALUES (NEWID(), $1, $2, $3, $4, $5)`,
             [viajeId, req.user.id, l.ocurrido_en, l.baldes, l.novedad],
           );
         }

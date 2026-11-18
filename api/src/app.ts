@@ -2,6 +2,7 @@ import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
 import rateLimit from '@fastify/rate-limit';
+import estaticos from '@fastify/static';
 import type { Rol } from '@shared/dominio';
 import type { Db } from './db';
 import { rutasSesion } from './rutas/sesion';
@@ -42,6 +43,8 @@ export interface OpcionesApp {
   offsetZona?: string;
   origenesPermitidos?: string[];
   logger?: boolean;
+  /** Carpeta con la app compilada (web/dist). Si se indica, la API también publica la app: un solo web service. */
+  carpetaWeb?: string;
 }
 
 export async function crearApp(o: OpcionesApp) {
@@ -60,7 +63,7 @@ export async function crearApp(o: OpcionesApp) {
       return rep.code(401).send({ error: 'Sesión vencida o inválida. Ingrese de nuevo.' });
     }
     // El usuario puede haber sido desactivado después de iniciar sesión.
-    const activo = await o.db.query('SELECT 1 FROM usuario WHERE id = $1 AND activo', [req.user.id]);
+    const activo = await o.db.query('SELECT 1 FROM usuario WHERE id = $1 AND activo = 1', [req.user.id]);
     if (!activo.rowCount) return rep.code(401).send({ error: 'Usuario inactivo.' });
     if (roles.length && !roles.includes(req.user.rol)) {
       return rep.code(403).send({ error: 'Su rol no tiene permiso para esta acción.' });
@@ -79,6 +82,25 @@ export async function crearApp(o: OpcionesApp) {
   await app.register(rutasTablero);
   await app.register(rutasUsuarios);
   await app.register(rutasLecturas);
+
+  if (o.carpetaWeb) {
+    await app.register(estaticos, {
+      root: o.carpetaWeb,
+      wildcard: false,
+      setHeaders(res, ruta) {
+        // index.html y el service worker se revisan siempre, así las actualizaciones llegan a los teléfonos;
+        // los archivos de assets/ llevan hash en el nombre y pueden guardarse indefinidamente.
+        if (/[\\/]assets[\\/]/.test(ruta)) res.header('cache-control', 'public, max-age=31536000, immutable');
+        else res.header('cache-control', 'no-cache');
+      },
+    });
+    // Rutas de la app (navegación del lado del cliente): se responde con index.html.
+    app.setNotFoundHandler((req, rep) => {
+      if ((req.method !== 'GET' && req.method !== 'HEAD') || req.url.startsWith('/api/'))
+        return rep.code(404).send({ error: 'Ruta no encontrada.' });
+      return rep.header('cache-control', 'no-cache').sendFile('index.html');
+    });
+  }
   return app;
 }
 

@@ -15,7 +15,7 @@ export async function rutasSesion(app: FastifyInstance) {
       const datos = Ingreso.safeParse(req.body);
       if (!datos.success) return rep.code(400).send({ error: 'Documento o PIN con formato inválido.' });
       const r = await app.db.query<UsuarioToken & { pin_hash: string }>(
-        'SELECT id, nombre, rol, sede_id, pin_hash FROM usuario WHERE documento = $1 AND activo',
+        'SELECT id, nombre, rol, sede_id, pin_hash FROM usuario WHERE documento = $1 AND activo = 1',
         [datos.data.documento],
       );
       const u = r.rows[0];
